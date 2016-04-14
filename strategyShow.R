@@ -1,6 +1,6 @@
 rm(list=ls())
 ## load library and functions
-source("/Users/JasonWang/Documents/LibR/funDevelop.R")
+source("funDevelop.R")
 
 ### import CSV data
 nam.dirData <- "/Users/JasonWang/Documents/GTJA_TRADE/equityCSV_DB/"

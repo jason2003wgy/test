@@ -7,12 +7,6 @@ library(PerformanceAnalytics)
 ####################################################################################################################################################################################
 ###################################################################### CHECK function development################################################################################
 ###################### check functions
-#check.allNA <- function(inp){ return(Check.AllNA(inp)) }
-#check.isScalar <- function(inp) { return(Check.IsScalar(inp))}
-#check.stopIf <- function(conditionTrue,stopMessage){ return(Check.StopIf(conditionTrue,stopMessage)) }
-#check.unique <- function(inpVec){ return(Check.Unique(inpVec))}
-#check.existVarInDF <- function(inpDf,varNames) { return(Check.ExistVarInDF(inpDf,varNames))}
-
 Check.AllNA <- function(inp){
   ## only works for vector!
   if (sum(is.na(inp))==length(inp)){
