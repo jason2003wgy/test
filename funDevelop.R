@@ -1,11 +1,12 @@
 ############# load library
+############# load library
 library(xlsx)
 library(stringr)
 library(PerformanceAnalytics)
 
 
-####################################################################################################################################################################################
-###################################################################### CHECK function development################################################################################
+########################################################################################################################################################################
+###################################################################### CHECK function development#################################################################
 ###################### check functions
 Check.AllNA <- function(inp){
   ## only works for vector!
@@ -57,6 +58,7 @@ Check.VerifyDictStr <- function(dictStra){
   for (idx in 1:length(uniState)) {
     Check.StopIf(!identical(sort(unique(dictStra$asset[dictStra$state==uniState[idx]])),uniAsset),
                  paste0("In state of ",uniState[idx]," all asset class should be defined!"))
+    #Check.StopIf(sum(abs(dictStra$weight[dictStra$state==uniState[idx]]-1)>1e-9)>0,"Weights for each state should add up to 1!")
   }
 }
 ##############################################END: check functions#########
@@ -177,7 +179,7 @@ DataP.PrepXts <- function(dfEq,order.by,fieldOut=names(dfEq),rm.na=TRUE,...){
   Check.Unique(order.by)
   Check.StopIf(!identical(order.by,sort(order.by)),"Must be sorted")
   
-  xtsOut <- xts(dfEq,order.by=order.by,...)
+  xtsOut <- xts(dfEq,order.by=order.by,stringsAsFactors=FALSE,...)
   if(!identical(names(xtsOut),fieldOut)){
     Check.Unique(fieldOut)
     Check.StopIf(!(is.character(dfEq)&identical(setdiff(fieldOut,names(xtsOut)),character(0))),"Must be string and be subset of names(xtsOut)")
@@ -285,6 +287,31 @@ Match.Robust <- function(vec2Match,refUsed){
 
 
 #####################BEGIN: equity performance functions################################################################
+Eq.PrepHistBySym <- function(sym.int,dfEq){
+  Check.IsScalar(sym.int)
+  Check.StopIf(!is.character(sym.int),"Must be string scalar!")
+  intVar <- c("date","open","close","state")
+  Check.ExistVarInDF(dfEq,intVar)
+  df <- dfEq[,match(intVar,names(dfEq))]
+  names(df) <- c("date",paste0("sym_",toUpperNoSpace(sym.int),"_open"),
+                 paste0("sym_",toUpperNoSpace(sym.int),"_close"),
+                 paste0("sym_",toUpperNoSpace(sym.int),"_state"))
+  return(df)
+}
+
+Eq.MergeTwoSymHist <- function(dfAdj1,dfAdj2){
+  Check.ExistVarInDF(dfAdj2,"date")
+  Check.ExistVarInDF(dfAdj1,"date")
+  Check.StopIf(!identical(intersect(names(dfAdj1),names(dfAdj2)),"date"),"Two df should only share date as common col name!")
+  Check.Unique(dfAdj2$date)
+  Check.Unique(dfAdj1$date)
+  Check.StopIf(!(sum(dfAdj2$date!=sort(dfAdj2$date))==0 & sum(dfAdj1$date!=sort(dfAdj1$date))==0),"Both should be sorted and identical")
+  dateComm <- sort(as.Date(intersect(dfAdj1$date,dfAdj2$date)))
+  out <- merge(dfAdj1,dfAdj2,by="date")
+  Check.StopIf(!identical(dateComm,out$date),"Expected to be identical here!")
+  return(out)
+}
+
 Eq.GetMoveAvg <- function(vecPrice,vecDate,nLag){
   Check.StopIf(class(vecDate)!="Date","Must be class of Date!")
   Check.Unique(vecDate)
@@ -339,7 +366,7 @@ Eq.CalReturnAdjacent <- function(vecPrice,vecDate){
   Check.Unique(vecDate)
   Check.StopIf(!identical(vecDate,sort(vecDate)),"Must be sorted")
   Check.StopIf(!(is.vector(vecPrice)),"Both price and date should be vector")
-  Check.StopIf(length(vecPrice)!=length(vecDate),"Both price and date should be have same length")
+  Check.StopIf(length(vecPrice)!=length(vecDate),"!!!! ??? Both price and date should be have same length")
   Check.Unique(vecDate)
   Check.StopIf(!identical(sort(vecDate),vecDate),"date must be sorted from small to large")
   Check.StopIf(!(is.numeric(vecPrice)),"vecPrice must be numeric")
@@ -400,48 +427,136 @@ Eq.GetBuySellDates <- function(vecLogical,vecDate,nrDays2ExcuteOrder=1){
   return(res)
 }
 
-Eq.ImplStrategy <- function(dfEq,vecLogi,...){
+Eq.ImplStrategy <- function(dfEq,vecLogi,type.price="open",nrDays2ExcuteOrder=1,...){
   Check.StopIf(!is.data.frame(dfEq),"Must be data frame")
   Check.ExistVarInDF(dfEq,c("close","date","open"))
   ### benchmark, i.e., buy & hold
   retBench <- Eq.CalReturnAdjacent(dfEq$close,dfEq$date)
-  dfInv <- Eq.GetBuySellDates(vecLogi,dfEq$date)
+  lst <- Eq.CalRetByFlagHold(vecLogi,dfEq$date,dfEq$close,dfEq$open,type.price,nrDays2ExcuteOrder)
+  ############# here we evalueate performance
+  tmp <- data.frame(date=retBench$date,benchmark=retBench$value,strategy=lst$retStra$value,stringsAsFactors=TRUE)
+  tmp <- Eq.EvalPerform(tmp,lst$retStra$hold,...)
+  return(list(infoStra=lst$infoStra,strOverview=tmp$infoOverview,xtsReturn=tmp$xtsReturn))
+}
+
+Eq.CalRetByFlagHold <- function(flagHold,vecDate,vecClose,vecOpen,type.price="open",...){
+  dfInv <- Eq.GetBuySellDates(flagHold,vecDate,...)
+  Check.IsScalar(type.price)
+  Check.StopIf(!is.character(type.price),"Must be string")
+  Check.StopIf(!(is.vector(vecOpen)&is.vector(vecClose)),"vecOpen and vecClose must be vector")
+  Check.StopIf(!(is.numeric(vecOpen)&is.numeric(vecClose)),"vecOpen and vecClose must be numeric")
+  Check.StopIf(!(length(vecClose)==length(vecOpen)&length(vecDate)==length(vecClose)),"Must be same length")
+  Check.ExistVarInDF(dfInv,c("dateBuy","dateSell"))
   Check.Unique(dfInv$dateBuy)
   Check.Unique(dfInv$dateSell)
   Check.StopIf(sum(dfInv$dateBuy > dfInv$dateSell)>0,"Error: dateBuy should be always larger than dateSell!")
   Check.StopIf(!identical(dfInv$dateBuy,sort(dfInv$dateBuy)),"Should be sequential buy dates")
   Check.StopIf(!identical(dfInv$dateSell,sort(dfInv$dateSell)),"Should be sequential sell dates")
   Check.StopIf(sum(dfInv$dateBuy[2:length(dfInv$dateBuy)] < dfInv$dateSell[1:(length(dfInv$dateSell)-1)])>0,"1st buy then sell!!")
-  dfInv$priceBuy <- dfEq$open[match(dfInv$dateBuy,dfEq$date)]
-  dfInv$priceSell <- dfEq$open[match(dfInv$dateSell,dfEq$date)]
+  
+  dfEq <- data.frame(date=vecDate,open=vecOpen,close=vecClose,stringsAsFactors=FALSE)
+  if (toUpperNoSpace(type.price)==toUpperNoSpace("open")){
+    dfInv$priceBuy <- dfEq$open[match(dfInv$dateBuy,dfEq$date)]
+    dfInv$priceSell <- dfEq$open[match(dfInv$dateSell,dfEq$date)]
+  } else if (toUpperNoSpace(type.price)==toUpperNoSpace("close")) {
+    dfInv$priceBuy <- dfEq$close[match(dfInv$dateBuy,dfEq$date)]
+    dfInv$priceSell <- dfEq$close[match(dfInv$dateSell,dfEq$date)]
+  }  else{
+    stop("Currently, only type.price of open and close is implemented. Pls expand here")
+  }
   dfInv$retPeriod <- dfInv$priceSell/dfInv$priceBuy-1
-  ####### here we construct daily returns according to chosen strategy
-  print("This function assumes that buy/sell are made on open price! Make sense if we assume t+1 to react with signal")
-  retStr <- retBench
+  retStr <- Eq.CalReturnAdjacent(dfEq$close,dfEq$date)
   retStr$value <- 0
   retStr$hold <- FALSE
   for (idx in 1:dim(dfInv)[1]){
+    posSel <- which(dfEq$date >= dfInv$dateBuy[idx] & dfEq$date <= dfInv$dateSell[idx])
     if (identical(dfInv$dateBuy[idx],dfInv$dateSell[idx])){
-      retStr$value[match(dfInv$dateBuy[idx],retStr$date)] <- dfInv$priceSell[idx]/dfInv$priceBuy[idx]-1
+      print("We have intra-day holding in this case. Pls investigate if it is valid")
+      retStr$value[match(dfInv$dateBuy[idx],retStr$date)] <- 
+        dfEq$close[match(dfInv$dateBuy[idx],dfEq$date)]/dfEq$open[match(dfInv$dateBuy[idx],dfEq$date)]-1
       retStr$hold[match(dfInv$dateBuy[idx],retStr$date)] <- TRUE
     } else {
-      posSel <- which(dfEq$date >= dfInv$dateBuy[idx] & dfEq$date <= dfInv$dateSell[idx])
-      # dayBuy, we enter with open price, thus return is generated at the end of dayBuy and calculated by open and close price of dayBuy
-      # daySell, we sell with open price, thus return is generated at the end of dayBuy and cal by open_daySell / close_daySell-1 -1
-      tmp <- c(dfEq$open[min(posSel)],dfEq$close[posSel[-length(posSel)]],dfEq$open[max(posSel)]) 
-      tmp <- Eq.CalReturnAdjacent(tmp,c(dfEq$date[min(posSel)-1],dfEq$date[posSel]))
-      retStr$value[match(tmp$date,retStr$date)] <- tmp$value
-      retStr$hold[match(tmp$date[-length(tmp$date)],retStr$date)] <- TRUE  # the last day the sell day, i.e, do not hold 
+      if(toUpperNoSpace(type.price)==toUpperNoSpace("open")){
+        ######### approach 1: buy & sell at open price!
+        # dayBuy, we enter with open price, thus return is generated at the end of dayBuy and calculated by open and close price of dayBuy
+        # daySell, we sell with open price, thus return is generated at the end of dayBuy and cal by open_daySell / close_daySell-1 -1
+        tmp <- c(dfEq$open[min(posSel)],dfEq$close[posSel[-length(posSel)]],dfEq$open[max(posSel)]) 
+        tmp <- Eq.CalReturnAdjacent(tmp,c(dfEq$date[min(posSel)-1],dfEq$date[posSel]))
+        retStr$value[match(tmp$date,retStr$date)] <- tmp$value
+        retStr$hold[match(tmp$date[-length(tmp$date)],retStr$date)] <- TRUE  # the last day the sell day, i.e, do not hold
+      } else if (toUpperNoSpace(type.price)==toUpperNoSpace("close")) {
+        ########## approach 2: buy & sell at close price
+        tmp <- c(dfEq$close[min(posSel)],dfEq$close[posSel])
+        tmp <- Eq.CalReturnAdjacent(tmp,c(dfEq$date[min(posSel)]-1,dfEq$date[posSel]))
+        retStr$value[match(as.Date(intersect(tmp$date,retStr$date)),retStr$date)] <- 
+          tmp$value[match(as.Date(intersect(tmp$date,retStr$date)),tmp$date)]
+        retStr$hold[match(tmp$date[-1],retStr$date)] <- TRUE  # the last day the sell day, i.e, do not hold
+      } else{
+        stop("Currently, only type.price of open and close is implemented. Pls expand here")
+      }
     }
   }
   Check.StopIf(abs(prod(dfInv$retPeriod+1)-prod(1+retStr$value))>1e-6,"These two returns should be the same!!!")
   tmp <- DataP.GetPosBegEndTrueGroup(retStr$hold)
   dfInv$daysHold <- tmp[,2]-tmp[,1]+1
-  ############# here we evalueate performance
-  tmp <- data.frame(date=retBench$date,benchmark=retBench$value,strategy=retStr$value,stringsAsFactors=TRUE)
-  tmp <- Eq.EvalPerform(tmp,retStr$hold,...)
-  return(list(strInfo=dfInv,strOverview=tmp$infoOverview,xtsReturn=tmp$xtsReturn))
+  return(list(infoStra=dfInv,retStra=retStr))
 }
+
+Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.price="open",nrDays2ExcuteOrder=1){
+  Check.IsScalar(state.cashOnly)
+  Check.StopIf(!is.character(state.cashOnly),"state.cashOnly must be string scalar")
+  Check.VerifyDictStr(dictStra)
+  # Check.ExistVarInDF(dfEq,c("state","close","open","date"))
+  Check.StopIf(!identical(setdiff(unique(dfEq$state),unique(dictStra$state)),character(0)),"state of dfEq must be subset of state of dictStra")
+  # ???Check.StopIf(,"state of cash must be included")
+  print(aggregate(close~state,data=dfEq,FUN=length))
+  Check.StopIf(!identical(setdiff(state.cashOnly,unique(dictStra$state)),character(0)),"state.cashOnly must be defined in dictStra")
+  namNonCashAsset <- toUpperNoSpace(as.character(unique(dictStra$asset)[unique(dictStra$asset)!="cash"]))
+  ## select relevant columns of interested assets
+  tmp <- rep(0,length(names(dfAdj)))
+  for (idx in 1:length(namNonCashAsset)){
+    tmp <- tmp + grepl(namNonCashAsset[idx],toUpperNoSpace(names(dfAdj)))
+  }
+  Check.StopIf(sum(tmp)==0,"dfAdj does not contain any asset defined in dictStra")
+  dfUse <-  dfAdj[match(c("date",names(dfAdj)[tmp>0]),names(dfAdj))]
+  
+  posClose <- which(grepl("_CLOSE",toUpperNoSpace(names(dfUse))))
+  posOpen <- which(grepl("_OPEN",toUpperNoSpace(names(dfUse))))
+  posState <- which(grepl("_STATE",toUpperNoSpace(names(dfUse))))
+  Check.StopIf(sum(posClose)==0,"Selected data must have close price")
+  Check.StopIf(sum(posOpen)==0,"Selected data must have open price")
+  Check.StopIf(sum(posState)==0,"Selected data must have state")
+  
+  ### Step1: first determine Flag of empty holing, i.e., cash only, in next step, we allocation weights
+  # Note all here we assume all strtegy is determined by the close price of each day. Hence, next open price to react!
+  if (length(posState)==1) {
+    flagHold <- dfUse[,posState] != state.cashOnly
+  } else if (length(posState)>1){
+    flagHold <- dfUse[,posState] != state.cashOnly
+  } else {
+    stop("length(posState) should not be 0 or negative!!!")
+  }
+  
+  if (length(namNonCashAsset)==1){
+    tst <- Eq.CalRetByFlagHold(flagHold,dfUse$date,dfUse[,posOpen[1]],dfUse[,posClose[1]],type.price,nrDays2ExcuteOrder)
+    strRet <- tst$retStra
+    ## adjust state dates to be consistent 
+    tmpState <- data.frame(date=dfUse$date[(1+nrDays2ExcuteOrder):length(dfUse$date)],
+                           state=dfUse[1:(length(dfUse$date)-nrDays2ExcuteOrder),posState[1]],stringsAsFactors=FALSE)
+    strRet$state <- tmpState$state[match(strRet$date,tmpState$date)]
+    tmpDict <- dictStra[toupperNoSpace(dictStra$asset)==namNonCashAsset,]
+    strRet$weigth <- tmpDict$weight[Match.Robust(strRet$state,tmpDict$state)]  
+    strRet$return <- strRet$value * as.numeric(strRet$weigth)
+    
+    return(list(infoStra=tst$infoStra,retStra=strRet))
+  } else {
+    stop("Please extend the code for multi-assets with partial investment!!!!")
+    for (idx in 1:length(namNonCashAsset)){
+      tst <- Eq.CalRetByFlagHold(flagHold[,idx],dfUse$date,dfUse[,posOpen[idx]],dfUse[,posClose[idx]])
+    }
+  }
+}
+
 
 Eq.EvalPerform <- function(dfRet,vecLogi,holdTime2Sim=1250,nSim=1000){
   Check.IsScalar(holdTime2Sim)
@@ -522,13 +637,13 @@ Eq.EvalPerform <- function(dfRet,vecLogi,holdTime2Sim=1250,nSim=1000){
   print(infoOverview)
   return(list(infoOverview=infoOverview,xtsReturn=tmpXts))
 }
-################################################################################################################################END: equity performance functions###################
+##############################################################################################END: equity performance functions###################
 
 
 
 
-####################################################################################################################################################################################
-###################################### the following functions are for Trade projection development################################################################################
+##########################################################################################################################################################
+###################################### the following functions are for Trade projection development##############################################################
 dataP.readTradeSheet <- function(dirXlsFile,dictTradeSheet){
   Check.IsScalar(dirXlsFile)
   Check.StopIf(!is.character(dirXlsFile),"dirXlsFile must be string scalar!")
@@ -953,4 +1068,4 @@ yahoo.getHistPriceSingleId <- function(idEq,namExchange,dateBeg,dateEnd) {
     return(res)
   }
 }
-##################################################################################################################################################END: trade project###############
+####################################################################################################################END: trade project###############
