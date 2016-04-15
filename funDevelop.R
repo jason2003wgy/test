@@ -536,18 +536,18 @@ Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.p
   } else {
     stop("length(posState) should not be 0 or negative!!!")
   }
-  
   if (length(namNonCashAsset)==1){
-    tst <- Eq.CalRetByFlagHold(flagHold,dfUse$date,dfUse[,posOpen[1]],dfUse[,posClose[1]],type.price,nrDays2ExcuteOrder)
+    tst <- Eq.CalRetByFlagHold(flagHold,dfUse$date,dfUse[,posClose[1]],dfUse[,posOpen[1]],type.price,nrDays2ExcuteOrder)
     strRet <- tst$retStra
     ## adjust state dates to be consistent 
     tmpState <- data.frame(date=dfUse$date[(1+nrDays2ExcuteOrder):length(dfUse$date)],
                            state=dfUse[1:(length(dfUse$date)-nrDays2ExcuteOrder),posState[1]],stringsAsFactors=FALSE)
+    # adjustment for the dateSell, those weigths should be applied as well
+    tmpState$state[match(tst$infoStra$dateSell,tmpState$date)] <- tmpState$state[match(tst$infoStra$dateSell,tmpState$date)-nrDays2ExcuteOrder]
     strRet$state <- tmpState$state[match(strRet$date,tmpState$date)]
     tmpDict <- dictStra[toupperNoSpace(dictStra$asset)==namNonCashAsset,]
     strRet$weigth <- tmpDict$weight[Match.Robust(strRet$state,tmpDict$state)]  
     strRet$return <- strRet$value * as.numeric(strRet$weigth)
-    
     return(list(infoStra=tst$infoStra,retStra=strRet))
   } else {
     stop("Please extend the code for multi-assets with partial investment!!!!")

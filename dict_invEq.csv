@@ -1,1 +1,1 @@
-state,asset,weight,typefull,cash,0,=full,etf,1,=part,cash,0.7,=part,etf,0.3,=clean,cash,1,=clean,etf,0,=
+state,asset,weight,typefull,cash,0,=full,etf,1,=part,cash,0,=part,etf,1,=clean,cash,1,=clean,etf,0,=
