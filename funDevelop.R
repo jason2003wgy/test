@@ -526,6 +526,7 @@ Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.p
   Check.StopIf(sum(posClose)==0,"Selected data must have close price")
   Check.StopIf(sum(posOpen)==0,"Selected data must have open price")
   Check.StopIf(sum(posState)==0,"Selected data must have state")
+  Check.StopIf(!(length(posState)==length(posOpen)&length(posOpen)==length(posClose)),"posState, posOpen, and posClose Must be same length")
   
   ### Step1: first determine Flag of empty holing, i.e., cash only, in next step, we allocation weights
   # Note all here we assume all strtegy is determined by the close price of each day. Hence, next open price to react!
