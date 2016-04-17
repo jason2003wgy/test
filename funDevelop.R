@@ -58,7 +58,7 @@ Check.VerifyDictStr <- function(dictStra){
   for (idx in 1:length(uniState)) {
     Check.StopIf(!identical(sort(unique(dictStra$asset[dictStra$state==uniState[idx]])),uniAsset),
                  paste0("In state of ",uniState[idx]," all asset class should be defined!"))
-    #Check.StopIf(sum(abs(dictStra$weight[dictStra$state==uniState[idx]]-1)>1e-9)>0,"Weights for each state should add up to 1!")
+    Check.StopIf(sum(abs(dictStra$weight[dictStra$state==uniState[idx]]-1)>1e-9)>0,"Weights for each state should add up to 1!")
   }
 }
 ##############################################END: check functions#########
@@ -623,6 +623,8 @@ Eq.EvalPerform <- function(dfRet,vecLogi,holdTime2Sim=1250,nSim=1000){
                               paste0(paste(round(apply(resPerform,2,max)*100,1),collapse="% vs. "),"%"),
                               paste0(paste(round(apply(resPerform,2,median)*100,1),collapse="% vs. "),"%"),
                               paste0(paste(round(apply(resPerform>0,2,sum)/dim(resPerform)[1]*100,1),collapse="% vs. "),"%"),
+                              paste0(paste(round(apply(resPerform>0.1,2,sum)/dim(resPerform)[1]*100,1),collapse="% vs. "),"%"),
+                              paste0(paste(round(apply(resPerform>0.2,2,sum)/dim(resPerform)[1]*100,1),collapse="% vs. "),"%"),
                               paste0(paste(round(apply(resPerform>0.6,2,sum)/dim(resPerform)[1]*100,1),collapse="% vs. "),"%") ),
                       stringsAsFactors=FALSE)
     row.names(tmp) <- c(row.names(infoOverview),
@@ -631,6 +633,8 @@ Eq.EvalPerform <- function(dfRet,vecLogi,holdTime2Sim=1250,nSim=1000){
                         paste0("Holding of ",holdTime2Sim," bench vs. strategy (max return):"),
                         paste0("Holding of ",holdTime2Sim," bench vs. strategy (median return):"),
                         paste0("Holding of ",holdTime2Sim," bench vs. strategy (prob of positive return):"),
+                        paste0("Holding of ",holdTime2Sim," bench vs. strategy (prob of >10% return):"),
+                        paste0("Holding of ",holdTime2Sim," bench vs. strategy (prob of >20% return):"),
                         paste0("Holding of ",holdTime2Sim," bench vs. strategy (prob of >60% return):"))
     infoOverview <- tmp
   }
