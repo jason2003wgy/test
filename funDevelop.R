@@ -1,5 +1,4 @@
 ############# load library
-############# load library
 library(xlsx)
 library(stringr)
 library(PerformanceAnalytics)
@@ -58,7 +57,7 @@ Check.VerifyDictStr <- function(dictStra){
   for (idx in 1:length(uniState)) {
     Check.StopIf(!identical(sort(unique(dictStra$asset[dictStra$state==uniState[idx]])),uniAsset),
                  paste0("In state of ",uniState[idx]," all asset class should be defined!"))
-    Check.StopIf(sum(abs(dictStra$weight[dictStra$state==uniState[idx]]-1)>1e-9)>0,"Weights for each state should add up to 1!")
+    Check.StopIf(sum(dictStra$weight[dictStra$state==uniState[idx]])>1,"Weights for each state should be less than 1!")
   }
 }
 ##############################################END: check functions#########
@@ -502,24 +501,54 @@ Eq.CalRetByFlagHold <- function(flagHold,vecDate,vecClose,vecOpen,type.price="op
   return(list(infoStra=dfInv,retStra=retStr))
 }
 
+Eq.AssignWeights2BuyHold <- function(dfState,strRet,infoStra,dictStra,namAssetUsed,nrDays2ExcuteOrder){
+  Check.IsScalar(nrDays2ExcuteOrder)
+  Check.StopIf(!(is.numeric(nrDays2ExcuteOrder) && nrDays2ExcuteOrder>=0),"nrDays2ExcuteOrder must be numberic and >= 0")
+  Check.IsScalar(namAssetUsed)
+  Check.ExistVarInDF(dfState,c("date","state"))
+  Check.ExistVarInDF(strRet,c("date"))
+  Check.ExistVarInDF(infoStra,c("dateSell"))
+  Check.ExistVarInDF(dictStra,c("asset","state","weight"))
+  Check.StopIf(!identical(setdiff(toupperNoSpace(namAssetUsed),toupperNoSpace(dictStra$asset)),character(0)),
+               "namAssetUsed should be defined!!!")
+  
+  dfRet <- strRet
+  tmpState <- dfState
+  tmpState$state[match(infoStra$dateSell,tmpState$date)] <- 
+    tmpState$state[match(infoStra$dateSell,tmpState$date)-nrDays2ExcuteOrder]
+  dfRet$state <- tmpState$state[match(dfRet$date,tmpState$date)]
+  tmpDict <- dictStra[toupperNoSpace(dictStra$asset)==toupperNoSpace(namAssetUsed),]
+  dfRet$weight <- tmpDict$weight[Match.Robust(dfRet$state,tmpDict$state)]  
+  dfRet$return <- dfRet$value * as.numeric(dfRet$weight)
+  return(dfRet)
+}
+
 Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.price="open",nrDays2ExcuteOrder=1){
   Check.IsScalar(state.cashOnly)
   Check.StopIf(!is.character(state.cashOnly),"state.cashOnly must be string scalar")
   Check.VerifyDictStr(dictStra)
-  # Check.ExistVarInDF(dfEq,c("state","close","open","date"))
-  Check.StopIf(!identical(setdiff(unique(dfEq$state),unique(dictStra$state)),character(0)),"state of dfEq must be subset of state of dictStra")
-  # ???Check.StopIf(,"state of cash must be included")
-  print(aggregate(close~state,data=dfEq,FUN=length))
   Check.StopIf(!identical(setdiff(state.cashOnly,unique(dictStra$state)),character(0)),"state.cashOnly must be defined in dictStra")
-  namNonCashAsset <- toUpperNoSpace(as.character(unique(dictStra$asset)[unique(dictStra$asset)!="cash"]))
+  namAssetUsed <- toUpperNoSpace(as.character(unique(dictStra$asset)))
   ## select relevant columns of interested assets
   tmp <- rep(0,length(names(dfAdj)))
-  for (idx in 1:length(namNonCashAsset)){
-    tmp <- tmp + grepl(namNonCashAsset[idx],toUpperNoSpace(names(dfAdj)))
+  for (idx in 1:length(namAssetUsed)){
+    tmp <- tmp + grepl(namAssetUsed[idx],toUpperNoSpace(names(dfAdj)))
   }
   Check.StopIf(sum(tmp)==0,"dfAdj does not contain any asset defined in dictStra")
   dfUse <-  dfAdj[match(c("date",names(dfAdj)[tmp>0]),names(dfAdj))]
   
+  # get interested asset names
+  tmp <- rep(NA,length(namAssetUsed))
+  for (idx in 1:length(namAssetUsed)){
+    tmp[idx] <- sum(grepl(namAssetUsed[idx],toUpperNoSpace(names(dfUse))))>0
+  }
+  namAssetUsed <- namAssetUsed[tmp]
+  if (length(namAssetUsed)<length(unique(dictStra$asset))){
+    print(paste0(paste(setdiff(toUpperNoSpace(as.character(unique(dictStra$asset))),namAssetUsed),collapse=","),
+                 " defined in dictionary cannot be found in the input dfAdj"))
+  } 
+  
+  # get relevant position of interested asset names
   posClose <- which(grepl("_CLOSE",toUpperNoSpace(names(dfUse))))
   posOpen <- which(grepl("_OPEN",toUpperNoSpace(names(dfUse))))
   posState <- which(grepl("_STATE",toUpperNoSpace(names(dfUse))))
@@ -537,24 +566,35 @@ Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.p
   } else {
     stop("length(posState) should not be 0 or negative!!!")
   }
-  if (length(namNonCashAsset)==1){
+  if (length(namAssetUsed)==1){
     tst <- Eq.CalRetByFlagHold(flagHold,dfUse$date,dfUse[,posClose[1]],dfUse[,posOpen[1]],type.price,nrDays2ExcuteOrder)
-    strRet <- tst$retStra
     ## adjust state dates to be consistent 
     tmpState <- data.frame(date=dfUse$date[(1+nrDays2ExcuteOrder):length(dfUse$date)],
                            state=dfUse[1:(length(dfUse$date)-nrDays2ExcuteOrder),posState[1]],stringsAsFactors=FALSE)
-    # adjustment for the dateSell, those weigths should be applied as well
-    tmpState$state[match(tst$infoStra$dateSell,tmpState$date)] <- tmpState$state[match(tst$infoStra$dateSell,tmpState$date)-nrDays2ExcuteOrder]
-    strRet$state <- tmpState$state[match(strRet$date,tmpState$date)]
-    tmpDict <- dictStra[toupperNoSpace(dictStra$asset)==namNonCashAsset,]
-    strRet$weigth <- tmpDict$weight[Match.Robust(strRet$state,tmpDict$state)]  
-    strRet$return <- strRet$value * as.numeric(strRet$weigth)
-    return(list(infoStra=tst$infoStra,retStra=strRet))
+    strRet <- Eq.AssignWeights2BuyHold(tmpState,tst$retStra,tst$infoStra,dictStra,namAssetUsed,nrDays2ExcuteOrder)
+    return(list(infoStra=tst$infoStra,retStra=strRet[,match(c("date","return","hold"),names(strRet))],retStra.extra=strRet))
   } else {
-    stop("Please extend the code for multi-assets with partial investment!!!!")
-    for (idx in 1:length(namNonCashAsset)){
+    # stop("Please extend the code for multi-assets with partial investment!!!!")
+    retCol <- matrix(NA,ncol=length(namAssetUsed),nrow=length(dfUse$date)-nrDays2ExcuteOrder)
+    holdCol <- retCol
+    lstInfo <- vector("list", length(namAssetUsed))
+    lstRet <- vector("list", length(namAssetUsed))
+    for (idx in 1:length(namAssetUsed)){
       tst <- Eq.CalRetByFlagHold(flagHold[,idx],dfUse$date,dfUse[,posOpen[idx]],dfUse[,posClose[idx]])
+      tmpState <- data.frame(date=dfUse$date[(1+nrDays2ExcuteOrder):length(dfUse$date)],
+                             state=dfUse[1:(length(dfUse$date)-nrDays2ExcuteOrder),posState[idx]],stringsAsFactors=FALSE)
+      strRet <- Eq.AssignWeights2BuyHold(tmpState,tst$retStra,tst$infoStra,dictStra,namAssetUsed[idx],nrDays2ExcuteOrder)
+      retCol[,idx] <- strRet$return
+      holdCol[,idx] <- strRet$return
+      lstInfo[[idx]] <- tst$infoStra
+      lstRet[[idx]] <- strRet
     }
+    names(lstInfo) <- namAssetUsed
+    names(lstRet) <- namAssetUsed
+    Check.StopIf(sum(is.na(holdCol))>0,"Do not expect any NA in hold collection!")
+    return(list(infoStra=lstInfo,
+                retStra=data.frame(date=strRet$date,return=apply(retCol,1,sum),hold=apply(holdCol,1,sum)>0,stringsAsFactors=FALSE),
+                retStra.extra=lstRet))
   }
 }
 
@@ -642,435 +682,15 @@ Eq.EvalPerform <- function(dfRet,vecLogi,holdTime2Sim=1250,nSim=1000){
   print(infoOverview)
   return(list(infoOverview=infoOverview,xtsReturn=tmpXts))
 }
+
+Tmp.PrepStateByMa <- function(df){
+  dfEq <- df
+  dfEq$state <- NA
+  dfEq$state[dfEq$close>dfEq$priceMA20 & dfEq$priceMA5 >= dfEq$priceMA20] <- "full"
+  dfEq$state[dfEq$close>dfEq$priceMA20 & dfEq$priceMA5<dfEq$priceMA20] <- "part"
+  dfEq$state[dfEq$close<dfEq$priceMA20] <- "clean"
+  Check.StopIf(sum(is.na(dfEq$state))>0,"Should not contain any NA. Sth is not defined")
+  print(aggregate(close~state,data=dfEq,FUN=length))
+  return(dfEq)
+}
 ##############################################################################################END: equity performance functions###################
-
-
-
-
-##########################################################################################################################################################
-###################################### the following functions are for Trade projection development##############################################################
-dataP.readTradeSheet <- function(dirXlsFile,dictTradeSheet){
-  Check.IsScalar(dirXlsFile)
-  Check.StopIf(!is.character(dirXlsFile),"dirXlsFile must be string scalar!")
-  tmp <- read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=1,colIndex=1,header=FALSE)
-  tmpHead <- sapply(read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=5,header=FALSE), as.character)
-  tmpHeadCase2 <- sapply(read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=6,header=FALSE), as.character)
-  if ( grepl("营业部",as.character(tmp[1,1])) & (grepl("交收日期",tmpHead[1])|grepl("序号",tmpHead[1])) ){
-    #print("1")
-    valMatRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,startRow=6,header=FALSE)
-    headerRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=5,header=FALSE)
-  } else if (grepl("营业部",as.character(tmp[1,1]))&(grepl("交收日期",tmpHeadCase2[1])|grepl("序号",tmpHeadCase2[1]))){
-    #print("2")
-    valMatRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,startRow=7,header=FALSE)
-    headerRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=6,header=FALSE)
-  } else if (grepl("交收日期",as.character(tmp[1,1])) | grepl("序号",as.character(tmp[1,1]))){
-    #print("3")
-    valMatRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,startRow=2,header=FALSE)
-    headerRaw <- read.xlsx(file=dirXlsFile,sheetIndex=1,rowIndex=1,header=FALSE)
-  } else{
-    print(paste0("Cannot handle this type trade sheet, please check the case that cell(1,1) is ",as.character(tmp[,1])))
-  }
-  headerString <- sapply(headerRaw, as.character)
-  resDf <- DataP.GetDfByCommonDict(valMatRaw,headerString,dictTradeSheet)
-  resDf$data <- DataP.DfFactor2Character(resDf$data)
-  return(resDf)
-}
-
-gtja.getEqId <- function(idInp){
-  Check.StopIf(!is.vector(idInp),"idInp must be a vector!")
-  tmpId <- as.character(idInp)
-  naPos <- (is.na(idInp)) | (idInp=="") | (idInp==" ") | (idInp=="NA") | (idInp=="N.A.")
-  ## complete the equity id
-  numId <- nchar(tmpId)
-  for (idx in 1:length(tmpId)){
-    if ((numId[idx] < 6) & (!naPos[idx])){
-      tmpId[idx] <- paste(paste(replicate(6-numId[idx],"0"),collapse=""),tmpId[idx],sep='')
-    }
-  }
-  tmpId[naPos] <- NA
-  return(tmpId)
-}
-
-gtja.getcashBalBegEndFromTradeHist <- function(inpTradHist){
-  ## get cashBalance (beginning and end) of each day, given trade records history
-  Check.StopIf(!is.data.frame(inpTradHist),"inpTradHist must be data frame")
-  Check.ExistVarInDF(inpTradHist,c("idTradeSeq","cashBalAfterTrade","amtNet","date"))
-  Check.Unique(inpTradHist$idTradeSeq)
-  Check.StopIf(!identical(inpTradHist$idTradeSeq,sort(inpTradHist$idTradeSeq)),"idTradeSeq must be sequential")
-  
-  tmpDayEnd <- DataP.GetFieldsForUniId(inpTradHist$date,inpTradHist$idTradeSeq,inpTradHist,"max")
-  if (length(inpTradHist$idTradeSeq)==1) {
-    tmpBeg <- inpTradHist$cashBalAfterTrade[1]+inpTradHist$amtNet[1]
-  } else{
-    tmpBeg <- c(inpTradHist$cashBalAfterTrade[1]+inpTradHist$amtNet[1],
-                tmpDayEnd$matPicked$cashBalAfterTrade[1:(length(tmpDayEnd$matPicked$cashBalAfterTrade)-1)])
-  }
-  return(data.frame(date=tmpDayEnd$idUnique,idTradeSeq=tmpDayEnd$matPicked$idTradeSeq,cashBalBeg=tmpBeg,cashBalEnd=tmpDayEnd$matPicked$cashBalAfterTrade))
-}
-
-gtja.getEndBalByVolFow <- function(dfTradeHist){
-  dfHistTrade <- dfTradeHist
-  Check.StopIf(!is.data.frame(dfHistTrade),"Must be a data frame")
-  Check.ExistVarInDF(dfHistTrade,c("date","idEquity","volFlowPosition","idTradeSeq"))
-  #Check.StopIf(class(dfHistTrade$date)!="Date","dateTrade must be in date format")
-  Check.StopIf(!is.numeric(dfHistTrade$volFlowPosition),"must be numeric")
-  Check.Unique(dfHistTrade$idSequence)
-  Check.StopIf(!identical(dfHistTrade$idSequence,sort(dfHistTrade$idSequence)),"idSequence must be unique and sequential!")
-  
-  if(sum(dfHistTrade$volFlowPosition<0)==0){
-    print("Input volFow shows no record to outflow. volFlowPosition is assumed that positive for inflow vol and negative for outflow")
-  }
-  
-  if(sum(is.na(dfHistTrade$volFlowPosition))>0){
-    print(paste0("volFlowPosition has ",sum(is.na(dfHistTrade$volFlowPosition))," missing values, which are replced by 0"))
-    volFlowPosition[is.na(dfHistTrade$volFlowPosition)] <- 0
-  }
-  ### for each Security, calculate its cumsum according to trade sequence!
-  # note that the combination of idTrade and dateTrade might be duplicated, since one day one can buy the same security
-  # multiple times
-  uniIdEq <- unique(dfHistTrade$idEquity)
-  dfHistTrade$cumSum <- NA
-  idx =1
-  for (idx in 1:length(uniIdEq)){
-    ixSel <- dfHistTrade$idEquity==uniIdEq[idx]
-    tmpIx <- match(sort(dfHistTrade$idTradeSeq[ixSel]),dfHistTrade$idTradeSeq[ixSel])
-    tmp <- dfHistTrade[ixSel,][tmpIx,]
-    tmp$cumSum <- cumsum(dfHistTrade$volFlowPosition[ixSel][tmpIx])
-    if (idx==1){
-      dfRes <- tmp
-    } else {
-      dfRes <- rbind(dfRes,tmp)
-    }
-  }
-  dfOut <- DataP.GetFieldsForUniId(paste(dfRes$idEquity,":",dfRes$date),dfRes$idTradeSeq,dfRes,"max")
-  dfOut$matPicked$balEnd <- dfOut$matPicked$cumSum
-  return(dfOut$matPicked[,match(c("date","idEquity","idTradeSeq","balEnd"),names(dfOut$matPicked))])
-}
-
-
-gtja.getAllHistBal <- function(dfTradeHist,dfCashBal,dictTypeTrade){
-  Check.StopIf(!(is.data.frame(dfTradeHist)&is.data.frame(dfCashBal)&is.data.frame(dictTypeTrade)),
-               "dfTradeHist, dfCashBal and dictTypeTrade must be data.frame")
-  Check.ExistVarInDF(dfCashBal,c("date","cashBalEnd"))
-  Check.ExistVarInDF(dfTradeHist,c("date","idTradeSeq","idEquity","vol","amtNet","cashBalAfterTrade","balEquity"))
-  Check.ExistVarInDF(dictTypeTrade,c("flowPosition","typeTrade","balSheetItem","typeSecurity"))
-  Check.Unique(dfCashBal$date)
-  Check.Unique(dfTradeHist$idTradeSeq)
-  Check.StopIf(!(identical(dfTradeHist$idTradeSeq,sort(dfTradeHist$idTradeSeq))),"dfTradeHist$idTradeSeq must be unique and sequential!")
-  ###### dates of two df must be idential
-  Check.StopIf(!identical(sort(dfCashBal$date),sort(unique(dfTradeHist$date))),"dates of two inputs must be matched! Can relaxed!!!! more code!")
-  
-  tmp <- toUpperNoSpace(dictTypeTrade$flowPosition[Match.Robust(dfTradeHist$typeTrade,dictTypeTrade$typeTrade)])
-  print("volFlowPosition is created based on vol, i.e., positive for inflow vol and negative for outflow")
-  dfTradeHist$volFlowPosition <- dfTradeHist$vol
-  dfTradeHist$volFlowPosition[tmp=="OUT"] <- dfTradeHist$vol[tmp=="OUT"] * (-1)
-  
-  ##### we construct Repo balance seperately
-  ## select Repo historical data
-  ixRepo <- toUpperNoSpace(dictTypeTrade$typeSecurity[Match.Robust(dfTradeHist$typeTrade,dictTypeTrade$typeTrade)])=="REPO"
-  ### select equity data
-  ixEquity <- toUpperNoSpace(dictTypeTrade$balSheetItem[Match.Robust(dfTradeHist$typeTrade,dictTypeTrade$typeTrade)])==toupper("idEquity") & 
-                          (!ixRepo)
-  dfEqHist <- dfTradeHist[ixEquity,]
-  dfBalEndEquity <- DataP.GetFieldsForUniId(paste0(dfEqHist$date,dfEqHist$idEquity),
-                                 dfEqHist$idTradeSeq,dfEqHist[,match(c("date","idEquity","idTradeSeq","balEquity"),names(dfEqHist))],"max")
-  names(dfBalEndEquity$matPicked)[names(dfBalEndEquity$matPicked)=="balEquity"] <- "balEnd"
-  if(sum(ixRepo)==0) {
-    print("No records of repo trades.")
-    dfBalEnd <- rbind(dfBalEndEquity$matPicked)
-  } else {
-    dfBalEndRepo <- gtja.getEndBalByVolFow(dfTradeHist[ixRepo,])
-    dfBalEnd <- rbind(dfBalEndEquity$matPicked,dfBalEndRepo)
-  }
-  ### attach cash bal @ day end
-  dfCashBal$idEquity <- "cash"
-  dfCashBal$balEnd <- dfCashBal$cashBalEnd
-  dfBalEnd <- rbind(dfBalEnd,dfCashBal[,match(names(dfBalEnd),names(dfCashBal))])
-  Check.Unique(paste0(dfBalEnd$idEquity,":",dfBalEnd$date))
-  #Check.Unique(dfBalEnd$idTradeSeq)
-  tmp <- sort(dfBalEnd$idTradeSeq,index.return=T)
-  return(list(dfBalEndAll=dfBalEnd[tmp$ix,],dfBalEndRepo=dfBalEndRepo,dfBalEndEquity=dfBalEndEquity$matPicked,dfBalEndCash=dfCashBal))
-}
-
-gtja.getEndBalGivenDate <- function(date2show,dfHistBalEnd){
-  Check.StopIf(!(class(date2show)=="Date"&length(date2show)==1),"date2show must be scalar Date class")
-  Check.StopIf(!is.data.frame(dfHistBalEnd),"dfHistBalEnd must be data frame")
-  Check.ExistVarInDF(dfHistBalEnd,c("date","idEquity","idTradeSeq","balEnd"))
-  Check.Unique(paste0(dfHistBalEnd$date,":",dfHistBalEnd$idEquity))
-  Check.StopIf(class(dfHistBalEnd$date)!="Date","dfHistBalEnd$date must be Date class")
-  Check.StopIf(date2show>max(dfHistBalEnd$date)|date2show<min(dfHistBalEnd$date),
-               paste0("date2show must be between ",min(dfHistBalEnd$date)," and ",max(dfHistBalEnd$date)))
-  
-  ixSel <- dfHistBalEnd$date <= date2show
-  df2use <- dfHistBalEnd[ixSel,]
-  
-  tmp <- DataP.GetFieldsForUniId(df2use$idEquity,df2use$idTradeSeq,df2use,"max")
-  ix2use <- abs(tmp$matPicked$balEnd)>0.01
-  return(tmp$matPicked[ix2use,])
-}
-
-gtja.getHistTradePriceCost <- function(idInp,histTrade){
-  #####print("This function does not take into account any cost generated after the stocks are cleanned up to zero! 
-  ## e.g., dividens recerivd after the position is closed!")
-  ##
-  ## checks
-  Check.IsScalar(idInp)
-  Check.StopIf(!(is.character(idInp)&nchar(idInp)),"Must be string with 6 elements!")
-  Check.ExistVarInDF(histTrade,c("idEquity","idTradeSeq","typeSecurity","date","amtNet","priceGross"))
-  Check.Unique(histTrade$idTradeSeq)
-  ### select relevant data 
-  dfUsed <- histTrade[which(histTrade$idEquity==idInp & toupperNoSpace(histTrade$typeSecurity) %in% toupperNoSpace(c("stock","dividen"))),]
-  Check.StopIf(!identical(dfUsed$idTradeSeq,sort(dfUsed$idTradeSeq)),"idTradeSeq Must be sorted")
-  ### adjust balEquity for dividen records, which have balEquity of 0
-  dfUsed$balEquityAdj <- dfUsed$balEquity
-  if (sum(toupperNoSpace(dfUsed$typeSecurity) == toupper("dividen"))>0){
-    posSel <- which(toupperNoSpace(dfUsed$typeSecurity) == toupper("dividen"))
-    for (idx in posSel){
-      if (idx != 1){
-        dfUsed$balEquityAdj[idx] <- dfUsed$balEquityAdj[idx-1]
-      }
-    }
-  }
-  ### determine price for the stock overall
-  dfUsed$amtNetCumTotal <- cumsum(dfUsed$amtNet)
-  tmp <- (-dfUsed$amtNetCumTotal)/dfUsed$balEquityAdj
-  tmp[!is.finite(tmp)] <- NA
-  dfUsed$priceCostTotal <- tmp
-  
-  ### determine price of stock
-  if (length(which(abs(dfUsed$balEquityAdj) < 1e-3))==0){
-    ### handle the situation that all balEquity is above zero!
-    dfUsed$amNetCumPerStrategy <- cumsum(dfUsed$amtNet)
-    dfUsed$priceCostPerStrategy <- (-dfUsed$amNetCumPerStrategy)/dfUsed$balEquityAdj
-    dfUsed$dateBegStrategy <- dfUsed$date[1]
-  } else{
-    posTmp <- c(0,which(abs(dfUsed$balEquityAdj) < 1e-3))
-    dfUsed$amNetCumPerStrategy <- NA
-    dfUsed$dateBegStrategy <- dfUsed$date[1]
-    for (idx in 2:length(posTmp)){
-      Check.StopIf(abs(dfUsed$balEquityAdj[posTmp[idx]])>1e-3,"Should be zero")
-      dfUsed$amNetCumPerStrategy[(posTmp[idx-1]+1):(posTmp[idx])] <- cumsum(dfUsed$amtNet[(posTmp[idx-1]+1):(posTmp[idx])])
-      dfUsed$dateBegStrategy[(posTmp[idx-1]+1):(posTmp[idx])] <- min(dfUsed$date[(posTmp[idx-1]+1):(posTmp[idx])])
-    }
-    if (tail(posTmp,1)!=dim(dfUsed)[1]){
-      dfUsed$amNetCumPerStrategy[(tail(posTmp,1)+1):dim(dfUsed)[1]] <- cumsum(dfUsed$amtNet[(tail(posTmp,1)+1):dim(dfUsed)[1]])
-      dfUsed$dateBegStrategy[(tail(posTmp,1)+1):dim(dfUsed)[1]] <- min(dfUsed$date[(tail(posTmp,1)+1):dim(dfUsed)[1]])
-    }
-    tmp <- (-dfUsed$amNetCumPerStrategy)/dfUsed$balEquityAdj
-    tmp[!is.finite(tmp)] <- NA
-    dfUsed$priceCostPerStrategy <- tmp
-  }
-  ## final adjustment for the cost at the trade of cleanning position, take the previous cost!
-  if(sum(is.na(dfUsed$priceCostTotal))>0){
-    pos <- which(is.na(dfUsed$priceCostTotal))
-    for (idx in pos){
-      if (idx!=1){
-        dfUsed$priceCostTotal[idx] <- dfUsed$priceCostTotal[idx-1]
-        dfUsed$priceCostPerStrategy[idx] <- dfUsed$priceCostPerStrategy[idx-1]
-      }
-    }
-  }
-  return(dfUsed[,match(c("idTradeSeq","date","idEquity","amtNet","balEquityAdj",
-                         "priceGross","priceCostTotal","priceCostPerStrategy","dateBegStrategy"),names(dfUsed))])
-}
-
-gtja.getBalSingleDate <- function(dateInt,dfBalEnd,dfPriceCost,dfTrade){
-  ### checks
-  Check.StopIf(!(is.data.frame(dfBalEnd)&is.data.frame(dfPriceCost)&is.data.frame(dfTrade)),"dfBalEnd,dfTrade and dfPriceCost must be data frame")
-  Check.IsScalar(dateInt)
-  Check.StopIf(!is.character(dateInt),"dateInt must be string")
-  dateInt <- try(as.Date(dateInt),silent=TRUE)
-  if (class(dateInt)=="try-error"){
-    stop("dateInpt must be in the format of YYYY-MM-DD ")
-  }
-  Check.ExistVarInDF(dfPriceCost,c("priceCostPerStrategy","idTradeSeq","dateBegStrategy"))
-  Check.ExistVarInDF(dfTrade,c("typeSecurity","idTradeSeq","namEquity"))
-  ixSel <- (!is.na(dfTrade$idEquity)) & (!is.na(dfTrade$namEquity))
-  dictIdName <- DataP.GetFieldsForUniId(dfTrade$idEquity[ixSel],dfTrade$idTradeSeq[ixSel],dfTrade$namEquity[ixSel],"max")
-  
-  infoBal <- gtja.getEndBalGivenDate(dateInt,dfBalEnd)
-  infoBal$date <- dateInt
-  infoBal$namEquity <- dictIdName$matPicked[Match.Robust(infoBal$idEquity,dictIdName$idUnique)]
-  infoBal$typeSecurity <- dfTrade$typeSecurity[Match.Robust(infoBal$idTradeSeq,dfTrade$idTradeSeq)]
-  infoBal$typeSecurity[infoBal$idEquity=="cash"] <- "cash"
-  infoBal$priceCostPerStrategy <- dfPriceCost$priceCostPerStrategy[Match.Robust(infoBal$idTradeSeq,dfPriceCost$idTradeSeq)]
-  infoBal$dateBegStrategy <- dfPriceCost$dateBegStrategy[Match.Robust(infoBal$idTradeSeq,dfPriceCost$idTradeSeq)]
-  infoStock <- unique(infoBal$idEquity[toupperNoSpace(infoBal$typeSecurity)==toupperNoSpace("stock") & infoBal$idEquity!="cash"])
-  infoStock <- yahoo.getExchange(infoStock)
-  infoStock$priceClose <- NA
-  infoStock$priceClosePrevDay <- NA
-  for (idx in 1:dim(infoStock)[1]){
-    tst <- yahoo.getHistPriceSingleId(infoStock$idEquity[idx],infoStock$namExchange[idx],dateInt-15,dateInt)
-    infoStock$priceClose[idx] <- tail(tst$priceClose,1)
-    tmp <- which(tst$vol>0)
-    if(length(tmp)>0){
-      infoStock$priceClosePrevDay[idx] <- tst$priceClose[sort(tmp,decreasing=T)[2]]
-    } else {
-      infoStock$priceClosePrevDay[idx] <- infoStock$priceClose[idx]
-    }
-  }
-  infoBal$daysHolding <- infoBal$date-infoBal$dateBegStrategy
-  infoBal$priceClose <- infoStock$priceClose[Match.Robust(infoBal$idEquity,infoStock$idEquity)]
-  infoBal$priceClosePrevDay <- infoStock$priceClosePrevDay[Match.Robust(infoBal$idEquity,infoStock$idEquity)]
-  infoBal$pnlCum <- (infoBal$priceClose - infoBal$priceCostPerStrategy)* infoBal$balEnd
-  infoBal$pnlDaily <- (infoBal$priceClose - infoBal$priceClosePrevDay)* infoBal$balEnd
-  ixSel <- infoBal$typeSecurity !="stock" 
-  print("Currently, this function cannot calculate P&L for none-stock items")
-  infoBal$pnlCum[ixSel] <- 0
-  infoBal$pnlDaily[ixSel] <- 0
-  infoBal$value <- infoBal$priceClose * infoBal$balEnd
-  ixSel <- infoBal$typeSecurity %in% c("cash","interestMoneyFund","moneyFund","capital")
-  infoBal$value[ixSel] <- infoBal$balEnd[ixSel]
-  ixSel <- infoBal$typeSecurity %in% c("repo")
-  infoBal$value[ixSel] <- infoBal$balEnd[ixSel]*100
-  return(infoBal)
-}
-
-gtja.getHistTradePriceCostAllId <- function(dfTrade) {
-  Check.StopIf(!is.data.frame(dfTrade),"dfTrade must be data frame!")
-  Check.ExistVarInDF(dfTrade,c("idEquity","typeSecurity"))
-  
-  uniIdStock <- unique(dfTrade$idEquity[toupperNoSpace(dfTrade$typeSecurity)==toupper("stock")])
-  if (length(uniIdStock)==0){
-    stop("The input does not contain any record of stock, according to dfTrade$typeSecurity")
-  }
-  print("This function does not take into account any cost generated after the stocks are cleanned up to zero! e.g., dividens recerivd after the position is closed!")
-  res <- gtja.getHistTradePriceCost(uniIdStock[1],dfTrade)
-  if (length(uniIdStock)>1) {
-    for (idx in 2:length(uniIdStock))
-    {
-      res <- rbind(res,gtja.getHistTradePriceCost(uniIdStock[idx],dfTrade))
-    }
-  }
-  return(res)
-}
-
-
-sina.getCurrentPriceOneId <- function(sina.id){
-  Check.IsScalar(sina.id)
-  tmpId <- sina.id
-  Check.StopIf(!(is.character(tmpId)&nchar(tmpId)==6),"Must be character of 6 elements!")
-  ## collect stock data
-  sina.path <- "http://hq.sinajs.cn/list="
-  sina.exchange <- "sz"
-  tmp <- read.table(url(paste0(sina.path,tolower(sina.exchange),tmpId),encoding="ISO8859-1"),stringsAsFactors=TRUE)
-  tmp <- tmp[,Size(tmp)[2]]
-  tst <- gregexpr(",\\s*",tmp)
-  if (tst[[1]][1]== -1){
-    ### if not SZ market then it's from Shanghai exchange
-    sina.exchange <- "sh"
-    tmp <- read.table(url(paste0(sina.path,tolower(sina.exchange),tmpId),encoding="ISO8859-1"),stringsAsFactors=TRUE)
-    tmp <- tmp[,Size(tmp)[2]]
-    tst <- gregexpr(",\\s*",tmp)
-  }
-  
-  ##### throw error if cannot find both SH and SZ, otherwise proceed
-  if (tst[[1]][1]== -1){
-    print(paste0(tmpId," cannot be found in both SZ and SH markets"))
-  } else {
-    pos <- str_locate_all(tmp,",")[[1]][,2]
-    val <- rep(NA,length(pos)-2)
-    for (idx in 2:length(pos)){
-      val[idx-1] <- str_sub(tmp,pos[idx-1]+1,pos[idx]-1) 
-    }
-    res <- data.frame(t(as.numeric(val[1:(length(val)-2)])))
-    names(res) <- c("open","closePrevious","priceCurrent","high","low","priceBuy","priceSell","vol","amt",
-                    "buy1Vol","buy1Price","buy2Vol","buy2Price","buy3Vol","buy3Price","buy4Vol","buy4Price","buy5Vol","buy5Price",
-                    "sell1Vol","sell1Price","sell2Vol","sell2Price","sell3Vol","sell3Price","sell4Vol","sell4Price","sell5Vol","sell5Price")
-    res$date <- as.Date(val[length(val)-1],"%Y-%m-%d")
-    res$time <- as.POSIXct(strptime(paste(tail(val,2),collapse=" "), "%Y-%m-%d %H:%M:%S"))
-    res$idEquity <- tmpId
-    res$namMarket <- sina.exchange
-    return(res)
-  }
-}
-
-sina.getHistPriceOneId <- function(idInp,dateBegInp,dateEndInp=Sys.Date()){
-  Check.IsScalar(idInp)
-  Check.StopIf(!(is.character(idInp)&nchar(idInp)==6),"Must be character of 6 elements!")
-  Check.StopIf(!(class(dateBegInp)=="Date"&class(dateEndInp)=="Date"),"dateBegInp and dateEndInp are both class of Date")
-  Check.StopIf(dateBegInp>dateEndInp,"dateEndInp must be larger than dateBegInp")
-  
-  dateBeg <- gsub("-","",as.character(dateBegInp))
-  dateEnd <- gsub("-","",as.character(dateEndInp))
-  tstBeg <- "http://biz.finance.sina.com.cn/stock/flash_hq/kline_data.php?&rand=random(10000)&symbol="
-  tstDateEnd <- "&end_date="
-  tstDateBeg <- "&begin_date="
-  tstEnd <- "&type=plain"
-  ##############
-  tmp <- try(read.table(url(paste0(tstBeg,"sh",idInp,tstDateEnd,dateEnd,tstDateBeg,dateBeg,tstEnd)),stringsAsFactors=FALSE),silent=TRUE)
-  if (class(tmp)=="try-error"){
-    tmp <- try(read.table(url(paste0(tstBeg,"sz",idInp,tstDateEnd,dateEnd,tstDateBeg,dateBeg,tstEnd)),stringsAsFactors=FALSE),silent=TRUE)
-    if (class(tmp)=="try-error"){
-      print(paste0("Possible 1: ",idInp," cannot be found in both SZ and SH markets. Possible 2: date issues, dateBegInp is ",dateBegInp,
-                   " dateEndInp is ",dateEndInp))
-    }
-  }
-  if (class(tmp)!="try-error"){
-    strMat <- unlist(strsplit(as.character(tmp[1,]),","))
-    res <- sina.prepareHist(strMat)
-    if (dim(tmp)[1]>1){
-      for (idx in 2:dim(tmp)[1]){
-        strMat <- unlist(strsplit(as.character(tmp[idx,]),","))
-        res <- rbind(res,sina.prepareHist(strMat))
-      }
-    }
-    res$idEquity <- idInp
-    return(res)
-  } 
-}
-
-sina.prepareHist <- function(strMat){
-  return(data.frame(date = as.Date(as.character(strMat[1]),"%Y-%m-%d"),
-                    open = as.double(strMat[2]),
-                    high = as.double(strMat[3]),
-                    close = as.double(strMat[4]),
-                    low = as.double(strMat[5]),
-                    vol = as.double(strMat[6])*100,
-                    stringsAsFactors=FALSE))
-}
-
-yahoo.getExchange <- function(idStock){
-  Check.StopIf(!(is.vector(idStock)&is.character(idStock)),"Must be string vector!")
-  Check.StopIf(sum(sapply(idStock,nchar)==6)!=length(idStock),"Must all have length of 6")
-  num <- as.numeric(sapply(idStock,function(x) substr(x,1,1)))
-  res <- rep("ss",length(num))
-  res[num<6] <- "sz"
-  return(data.frame(idEquity=idStock,namExchange=res,stringsAsFactors = FALSE))
-}
-
-yahoo.getHistPriceSingleId <- function(idEq,namExchange,dateBeg,dateEnd) {
-  if (class(dateBeg)!="Date"){
-    Check.StopIf(!is.character(dateBeg),"dateBeg must be string")
-    dateBeg <- try(as.Date(dateBeg),silent=TRUE)
-    if (class(dateBeg)=="try-error"){
-      stop("dateBeg must be in the format of YYYY-MM-DD ")
-    }
-  }
-  Check.StopIf(length(dateBeg)!=1,"dateBeg Must be scalar Date class")
-  if (class(dateEnd)!="Date"){
-    Check.StopIf(!is.character(dateEnd),"dateEnd must be string")
-    dateEnd <- try(as.Date(dateEnd),silent=TRUE)
-    if (class(dateEnd)=="try-error"){
-      stop("dateEnd must be in the format of YYYY-MM-DD ")
-    }
-  }
-  Check.StopIf(length(dateEnd)!=1,"dateEnd Must be scalar Date class")
-  Check.StopIf(dateEnd<dateBeg,"dateEnd Must be later than dateBeg")
-  Check.IsScalar(idEq)
-  Check.IsScalar(namExchange)
-  Check.StopIf(!(is.character(idEq)&nchar(idEq)==6),"idEq Must be scalar character of 6")
-  Check.StopIf(!is.character(namExchange),"namExchange Must be  character ")
-  Check.StopIf(sum(namExchange%in%c("ss","sz"))!=1,"namExchange Must be either ss or sz! ")
-  
-  setSymbolLookup(WHHX=list(name=paste0(idEq,".",namExchange),src="yahoo"))
-  tst <- try(getSymbols("WHHX",from=dateBeg,to=dateEnd),silent=T)
-  if (class(tst)=="try-error"){
-    stop(paste0(idEq,".",namExchange," cannot be found in Yahoo between ",dateBeg," and ",dateEnd,". Check idEq and dates!!!"))
-  } else {
-    res <- data.frame(date=index(WHHX),priceOpen=as.numeric(WHHX[,1]),priceHigh=as.numeric(WHHX[,2]),priceLow=as.numeric(WHHX[,3]),
-                      priceClose=as.numeric(WHHX[,4]),vol=as.numeric(WHHX[,5]),priceAdj=as.numeric(WHHX[,6]),stringsAsFactors=FALSE)
-    return(res)
-  }
-}
-####################################################################################################################END: trade project###############
