@@ -580,7 +580,7 @@ Eq.calRetAccountWeights <- function(dfAdj,dictStra,state.cashOnly="clean",type.p
     lstInfo <- vector("list", length(namAssetUsed))
     lstRet <- vector("list", length(namAssetUsed))
     for (idx in 1:length(namAssetUsed)){
-      tst <- Eq.CalRetByFlagHold(flagHold[,idx],dfUse$date,dfUse[,posOpen[idx]],dfUse[,posClose[idx]])
+      tst <- Eq.CalRetByFlagHold(flagHold[,idx],dfUse$date,dfUse[,posClose[idx]],dfUse[,posOpen[idx]],type.price,nrDays2ExcuteOrder)
       tmpState <- data.frame(date=dfUse$date[(1+nrDays2ExcuteOrder):length(dfUse$date)],
                              state=dfUse[1:(length(dfUse$date)-nrDays2ExcuteOrder),posState[idx]],stringsAsFactors=FALSE)
       strRet <- Eq.AssignWeights2BuyHold(tmpState,tst$retStra,tst$infoStra,dictStra,namAssetUsed[idx],nrDays2ExcuteOrder)
