@@ -298,16 +298,43 @@ Eq.PrepHistBySym <- function(sym.int,dfEq){
   return(df)
 }
 
-Eq.MergeTwoSymHist <- function(dfAdj1,dfAdj2){
+Eq.MergeTwoSymHist <- function(dfAdj1,dfAdj2,dateCommonOnly=FALSE){
   Check.ExistVarInDF(dfAdj2,"date")
   Check.ExistVarInDF(dfAdj1,"date")
   Check.StopIf(!identical(intersect(names(dfAdj1),names(dfAdj2)),"date"),"Two df should only share date as common col name!")
   Check.Unique(dfAdj2$date)
   Check.Unique(dfAdj1$date)
+  Check.IsScalar(dateCommonOnly)
+  Check.StopIf((!is.logical(dateCommonOnly))|is.na(dateCommonOnly),"dateCommonOnly should be either TRUE or FALSE")
   Check.StopIf(!(sum(dfAdj2$date!=sort(dfAdj2$date))==0 & sum(dfAdj1$date!=sort(dfAdj1$date))==0),"Both should be sorted and identical")
-  dateComm <- sort(as.Date(intersect(dfAdj1$date,dfAdj2$date)))
-  out <- merge(dfAdj1,dfAdj2,by="date")
-  Check.StopIf(!identical(dateComm,out$date),"Expected to be identical here!")
+  if (dateCommonOnly) {
+    print("Here, we only keep the common dates of two inputs")
+    dateComm <- sort(as.Date(intersect(dfAdj1$date,dfAdj2$date)))
+    out <- merge(dfAdj1,dfAdj2,by="date")
+    Check.StopIf(!identical(dateComm,out$date),"Expected to be identical here!")
+  } else {
+    dateFull <- sort(as.Date(union(dfAdj1$date,dfAdj2$date)))
+    out <- merge(dfAdj1,dfAdj2,by="date",all=TRUE)
+    Check.StopIf(sum(is.na(out$date))>0,"date should not contain NA! Pls check input")
+    colNoDate <- which(names(out)!="date")
+    for (idx in colNoDate){
+      rowNa <- which(is.na(out[,idx]))
+      if(length(rowNa)>0){ ### only perform if there is NA
+        for (idy in rowNa){
+          if (idy==1){ # if the first position is NA, then we take the 1st noneNA
+            nonNa <- which(!is.na(out[,idx])) 
+            if (length(nonNa)==0){ ### handle the case all NA
+              stop(paste0("All NA column. Useless to merge two df"))
+            } else {
+              out[idy,idx] <- out[min(nonNa),idx] # set it equal to previous value
+            }
+          } else { ## if NA is not the 1st observation, then just take the previous row
+            out[idy,idx] <- out[idy-1,idx] # set it equal to previous value
+          }
+        } # END loop over rows
+      }
+    }# END loop over columns
+  }
   return(out)
 }
 
