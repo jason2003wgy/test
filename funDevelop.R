@@ -1,5 +1,6 @@
 ############# load library
 #library(xlsx)
+library(dplyr)
 library(stringr)
 library(PerformanceAnalytics)
 
@@ -538,11 +539,13 @@ Eq.AssignWeights2BuyHold <- function(dfState,strRet,infoStra,dictStra,namAssetUs
   Check.ExistVarInDF(dictStra,c("asset","state","weight"))
   Check.StopIf(!identical(setdiff(toupperNoSpace(namAssetUsed),toupperNoSpace(dictStra$asset)),character(0)),
                "namAssetUsed should be defined!!!")
-  
   dfRet <- strRet
   tmpState <- dfState
+  ### two steps, 1st, shift dfState$state as vector by nrDays2ExcuteOrder (minic lagging of t+nrDays2ExcuteOrder) 
+  tmpState$state[(1+nrDays2ExcuteOrder):dim(dfState)[1]] <- dfState$state[1:(dim(dfState)[1]-nrDays2ExcuteOrder)]
+  ### 2nd, the date of sell should be always equal to the previous state 
   tmpState$state[match(infoStra$dateSell,tmpState$date)] <- 
-    tmpState$state[match(infoStra$dateSell,tmpState$date)-nrDays2ExcuteOrder]
+    tmpState$state[match(infoStra$dateSell,tmpState$date)-1]
   dfRet$state <- tmpState$state[match(dfRet$date,tmpState$date)]
   tmpDict <- dictStra[toupperNoSpace(dictStra$asset)==toupperNoSpace(namAssetUsed),]
   dfRet$weight <- tmpDict$weight[Match.Robust(dfRet$state,tmpDict$state)]  
